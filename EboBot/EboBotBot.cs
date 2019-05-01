@@ -24,6 +24,7 @@ namespace EboBot
     public class EboBotBot : IBot
     {
         private readonly EboBotAccessors _accessors;
+        private readonly WelcomeUserStateAccessors _welcomeUserStateAccessors;
         private readonly ILogger _logger;
 
         /// <summary>
@@ -32,7 +33,7 @@ namespace EboBot
         /// <param name="accessors">A class containing <see cref="IStatePropertyAccessor{T}"/> used to manage state.</param>
         /// <param name="loggerFactory">A <see cref="ILoggerFactory"/> that is hooked to the Azure App Service provider.</param>
         /// <seealso cref="https://docs.microsoft.com/en-us/aspnet/core/fundamentals/logging/?view=aspnetcore-2.1#windows-eventlog-provider"/>
-        public EboBotBot(EboBotAccessors accessors, ILoggerFactory loggerFactory)
+        public EboBotBot(EboBotAccessors accessors, WelcomeUserStateAccessors welcomeUserStateAccessors, ILoggerFactory loggerFactory)
         {
             if (loggerFactory == null)
             {
@@ -42,6 +43,7 @@ namespace EboBot
             _logger = loggerFactory.CreateLogger<EboBotBot>();
             _logger.LogTrace("Turn start.");
             _accessors = accessors ?? throw new System.ArgumentNullException(nameof(accessors));
+            _welcomeUserStateAccessors = welcomeUserStateAccessors ?? throw new System.ArgumentNullException(nameof(welcomeUserStateAccessors));
         }
 
         /// <summary>
@@ -59,67 +61,160 @@ namespace EboBot
         /// <seealso cref="IMiddleware"/>
         public async Task OnTurnAsync(ITurnContext turnContext, CancellationToken cancellationToken = default(CancellationToken))
         {
+            // use state accessor to extract the didBotWelcomeUser flag
+            var didBotWelcomeUser = await _welcomeUserStateAccessors.WelcomeUserState.GetAsync(turnContext, () => new WelcomeUserState());
+
             // Handle Message activity type, which is the main activity type for shown within a conversational interface
             // Message activities may contain text, speech, interactive cards, and binary or unknown attachments.
             // see https://aka.ms/about-bot-activity-message to learn more about the message and other activity types
             if (turnContext.Activity.Type == ActivityTypes.Message)
             {
-
-                if (turnContext.Activity.Text == "image")
+                // Your bot should proactively send a welcome message to a personal chat the first time
+                // (and only the first time) a user initiates a personal chat with your bot.
+                if (didBotWelcomeUser.DidBotWelcomeUser == false)
                 {
-                    var reply = turnContext.Activity.CreateReply();
-                    // Create an attachment.
-                    var attachment = new Attachment
-                    {
-                        ContentUrl = "https://docs.microsoft.com/en-us/dotnet/standard/microservices-architecture/media/cover-small.png",
-                        ContentType = "image/png",
-                        Name = "imageName",
-                    };
-                    // Add the attachment to our reply.
-                    reply.Attachments = new List<Attachment>() { attachment };
+                    didBotWelcomeUser.DidBotWelcomeUser = true;
+                    // Update user state flag to reflect bot handled first user interaction.
+                    await _welcomeUserStateAccessors.WelcomeUserState.SetAsync(turnContext, didBotWelcomeUser);
+                    await _welcomeUserStateAccessors.UserState.SaveChangesAsync(turnContext);
 
-                    // Send the activity to the user.
-                    await turnContext.SendActivityAsync(reply, cancellationToken);
-                    return;
+                    // the channel should sends the user name in the 'From' object
+                    var userName = turnContext.Activity.From.Name;
+
+                    await turnContext.SendActivityAsync($"You are seeing this message because this was your first message ever to this bot.", cancellationToken: cancellationToken);
+                    await turnContext.SendActivityAsync($"It is a good practice to welcome the user and provide personal greeting. For example, welcome {userName}.", cancellationToken: cancellationToken);
+                }
+                else
+                {
+                    // This example hardcodes specific utterances. You should use LUIS or QnA for more advance language understanding.
+                    var text = turnContext.Activity.Text.ToLowerInvariant();
+                    switch (text)
+                    {
+                        case "hello":
+                        case "hi":
+                            await turnContext.SendActivityAsync($"You said {text}.", cancellationToken: cancellationToken);
+                            break;
+                        case "intro":
+                        //case "help":
+                        //    await SendIntroCardAsync(turnContext, cancellationToken);
+                        //    break;
+                        default:
+                            //await turnContext.SendActivityAsync(WelcomeMessage, cancellationToken: cancellationToken);
+                            break;
+                    }
                 }
 
-                if (turnContext.Activity.Text == "card")
+                // Handle Message activity type, which is the main activity type for shown within a conversational interface
+                // Message activities may contain text, speech, interactive cards, and binary or unknown attachments.
+                // see https://aka.ms/about-bot-activity-message to learn more about the message and other activity types
+                if (turnContext.Activity.Type == ActivityTypes.Message)
                 {
-                    var reply = turnContext.Activity.CreateReply("What is your favorite color?");
 
-                    reply.SuggestedActions = new SuggestedActions()
+                    if (turnContext.Activity.Text == "image")
                     {
-                        Actions = new List<CardAction>()
+                        await SendImageTest(turnContext);
+                        return;
+                    }
+
+                    if (turnContext.Activity.Text == "card")
+                    {
+                        await SendCardTest(turnContext);
+                        return;
+                    }
+
+                    await IncreaseMessageCounterTest(turnContext, _accessors);
+                    await SendSimpleEchoTest(turnContext, _accessors);
+                }
+                else
+                {
+                    await turnContext.SendActivityAsync($"{turnContext.Activity.Type} event detected");
+                }
+            }
+        }
+
+        private async Task SendSimpleEchoTest(ITurnContext turnContext, EboBotAccessors accessors)
+        {
+            // Get the conversation state from the turn context.
+            var state = await accessors.CounterState.GetAsync(turnContext, () => new CounterState());
+
+            // Echo back to the user whatever they typed.
+            var responseMessage = $"Turn {state.TurnCount}: You sent '{turnContext.Activity.Text}'\n";
+            await turnContext.SendActivityAsync(responseMessage);
+        }
+
+        private async Task IncreaseMessageCounterTest(ITurnContext turnContext, EboBotAccessors accessors)
+        {
+            // Get the conversation state from the turn context.
+            var state = await accessors.CounterState.GetAsync(turnContext, () => new CounterState());
+
+            // Bump the turn count for this conversation.
+            state.TurnCount++;
+
+            // Set the property using the accessor.
+            await _accessors.CounterState.SetAsync(turnContext, state);
+
+            // Save the new turn count into the conversation state.
+            await _accessors.ConversationState.SaveChangesAsync(turnContext);
+        }
+
+        private async Task SendImageTest(ITurnContext turnContext)
+        {
+
+            var reply = turnContext.Activity.CreateReply();
+            // Create an attachment.
+            var attachment = new Attachment
+            {
+                ContentUrl = "https://docs.microsoft.com/en-us/dotnet/standard/microservices-architecture/media/cover-small.png",
+                ContentType = "image/png",
+                Name = "imageName",
+            };
+            // Add the attachment to our reply.
+            reply.Attachments = new List<Attachment>() { attachment };
+
+            // Send the activity to the user.
+            await turnContext.SendActivityAsync(reply);
+        }
+
+        private async Task SendCardTest(ITurnContext turnContext)
+        {
+            var reply = turnContext.Activity.CreateReply("What is your favorite color?");
+
+            reply.SuggestedActions = new SuggestedActions()
+            {
+                Actions = new List<CardAction>()
                         {
                             new CardAction() { Title = "Red", Type = ActionTypes.ImBack, Value = "Red" },
                             new CardAction() { Title = "Yellow", Type = ActionTypes.ImBack, Value = "Yellow" },
                             new CardAction() { Title = "Blue", Type = ActionTypes.ImBack, Value = "Blue" },
                         },
 
-                    };
-                    await turnContext.SendActivityAsync(reply, cancellationToken);
+            };
+            await turnContext.SendActivityAsync(reply);
+        }
 
-                    return;
-                }
-                // Get the conversation state from the turn context.
-                var state = await _accessors.CounterState.GetAsync(turnContext, () => new CounterState());
-
-                // Bump the turn count for this conversation.
-                state.TurnCount++;
-
-                // Set the property using the accessor.
-                await _accessors.CounterState.SetAsync(turnContext, state);
-
-                // Save the new turn count into the conversation state.
-                await _accessors.ConversationState.SaveChangesAsync(turnContext);
-
-                // Echo back to the user whatever they typed.
-                var responseMessage = $"Turn {state.TurnCount}: You sent '{turnContext.Activity.Text}'\n";
-                await turnContext.SendActivityAsync(responseMessage);
-            }
-            else
+        private async Task SendWelcomeMessageAsync(ITurnContext turnContext)
+        {
+            // Check to see if any new members were added to the conversation.
+            if (turnContext.Activity.MembersAdded.Count > 0)
             {
-                await turnContext.SendActivityAsync($"{turnContext.Activity.Type} event detected");
+                // Iterate over all new members added to the conversation.
+                foreach (var member in turnContext.Activity.MembersAdded)
+                {
+                    // Greet anyone that was not the target (recipient) of this message
+                    // the 'bot' is the recipient for events from the channel,
+                    // turnContext.activity.membersAdded == turnContext.activity.recipient.Id indicates the
+                    // bot was added to the conversation.
+                    if (member.Id != turnContext.Activity.Recipient.Id)
+                    {
+                        await turnContext.SendActivityAsync("Hello, this is a welcome message.");
+                        await turnContext.SendActivityAsync("Please, stand by...");
+                        //var activity = turnContext.Activity.CreateReply();
+                        //activity.Attachments = new List<Attachment> { Helpers.CreateAdaptiveCardAttachment(new[] { ".", "Dialogs", "Welcome", "Resources", "welcomeCard.json" }), };
+
+                        // Send welcome card.
+                        //await turnContext.SendActivityAsync(activity);
+                    }
+                }
             }
         }
     }

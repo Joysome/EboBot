@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using System;
+using System.IO;
 using System.Linq;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -58,6 +59,10 @@ namespace EboBot
            {
                var secretKey = Configuration.GetSection("botFileSecret")?.Value;
                var botFilePath = Configuration.GetSection("botFilePath")?.Value;
+               if (!File.Exists(botFilePath))
+               {
+                   throw new FileNotFoundException($"The .bot configuration file was not found. botFilePath: {botFilePath}");
+               }
 
                // Loads .bot configuration file and adds a singleton that your Bot can access through dependency injection.
                var botConfig = BotConfiguration.Load(botFilePath ?? @".\EboBot.bot", secretKey);
@@ -108,8 +113,10 @@ namespace EboBot
                // Create Conversation State object.
                // The Conversation State object is where we persist anything at the conversation-scope.
                var conversationState = new ConversationState(dataStore);
-
                options.State.Add(conversationState);
+
+               var userState = new UserState(dataStore);
+               options.State.Add(userState);
            });
 
             // Create and register state accessors.
@@ -133,6 +140,32 @@ namespace EboBot
                 var accessors = new EboBotAccessors(conversationState)
                 {
                     CounterState = conversationState.CreateProperty<CounterState>(EboBotAccessors.CounterStateName),
+                };
+
+                return accessors;
+            });
+
+            // Create and register state accessors.
+            // Accessors created here are passed into the IBot-derived class on every turn.
+            services.AddSingleton<WelcomeUserStateAccessors>(sp =>
+            {
+                var options = sp.GetRequiredService<IOptions<BotFrameworkOptions>>().Value;
+                if (options == null)
+                {
+                    throw new InvalidOperationException("BotFrameworkOptions must be configured prior to setting up the State Accessors");
+                }
+
+                var userState = options.State.OfType<UserState>().FirstOrDefault();
+                if (userState == null)
+                {
+                    throw new InvalidOperationException("UserState must be defined and added before adding user-scoped state accessors.");
+                }
+
+                // Create the custom state accessor.
+                // State accessors enable other components to read and write individual properties of state.
+                var accessors = new WelcomeUserStateAccessors(userState)
+                {
+                    WelcomeUserState = userState.CreateProperty<WelcomeUserState>(WelcomeUserStateAccessors.WelcomeUserName),
                 };
 
                 return accessors;
