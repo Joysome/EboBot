@@ -125,10 +125,34 @@ namespace EboBot
                     await IncreaseMessageCounterTest(turnContext, _accessors);
                     await SendSimpleEchoTest(turnContext, _accessors);
                 }
-                else
+            }
+            // Greet when users are added to the conversation.
+            // Note that all channels do not send the conversation update activity.
+            // If you find that this bot works in the emulator, but does not in
+            // another channel the reason is most likely that the channel does not
+            // send this activity.
+            else if (turnContext.Activity.Type == ActivityTypes.ConversationUpdate)
+            {
+                if (turnContext.Activity.MembersAdded != null)
                 {
-                    await turnContext.SendActivityAsync($"{turnContext.Activity.Type} event detected");
+                    // Iterate over all new members added to the conversation
+                    foreach (var member in turnContext.Activity.MembersAdded)
+                    {
+                        // Greet anyone that was not the target (recipient) of this message
+                        // the 'bot' is the recipient for events from the channel,
+                        // turnContext.Activity.MembersAdded == turnContext.Activity.Recipient.Id indicates the
+                        // bot was added to the conversation.
+                        if (member.Id != turnContext.Activity.Recipient.Id)
+                        {
+                            await turnContext.SendActivityAsync($"Hi there - {member.Name}. This message shows that you've just joined the channel with this bot.", cancellationToken: cancellationToken);
+                        }
+                    }
                 }
+            }
+            else
+            {
+                // Default behavior for all other type of activities.
+                await turnContext.SendActivityAsync($"{turnContext.Activity.Type} activity detected");
             }
         }
 
